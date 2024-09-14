@@ -45,15 +45,15 @@ public:
 // ----------------------------------------------------------------------------------------------------
 
 class Bitmap {
-private:
-    int _dataSize;
-    uint8_t* _data = nullptr;
-
 public:
+    Bitmap(const Bitmap& bitmap); // this constructor ensures that all the data is copied when passed into a function
     Bitmap(int width, int height, bool defaultValue = false);
     ~Bitmap();
 
     int width, height;
+
+    int dataSize;
+    uint8_t* data = nullptr;
 
     bool get(int x, int y);
     void set(int x, int y, bool value);
@@ -91,35 +91,46 @@ BitPointer BitRow::operator[](int x) {
 // Bitmap
 // --------------------------------------------------
 
+Bitmap::Bitmap(const Bitmap& bitmap) {
+    width = bitmap.width;
+    height = bitmap.height;
+    dataSize = bitmap.dataSize;
+
+    data = (uint8_t*)std::malloc(dataSize);
+    if (data == nullptr)
+        throw std::bad_alloc();
+    std::copy(bitmap.data, bitmap.data + dataSize, data);
+}
+
 Bitmap::Bitmap(int width, int height, bool defaultValue) : width(width), height(height) {
-    _dataSize = std::ceil(width * height / 8.0);
-    _data = (uint8_t*)std::malloc(_dataSize);
-    for (int i = 0; i < _dataSize; i++) {
+    dataSize = std::ceil(width * height / 8.0);
+    data = (uint8_t*)std::malloc(dataSize);
+    for (int i = 0; i < dataSize; i++) {
         if (defaultValue)
-            _data[i] = 0xFF;
+            data[i] = 0xFF;
         else
-            _data[i] = 0x00;
+            data[i] = 0x00;
     }
 }
 
 Bitmap::~Bitmap() {
-    if (_data != nullptr)
-        std::free(_data);
+    if (data != nullptr)
+        std::free(data);
 }
 
 bool Bitmap::get(int x, int y) {
     int index = (y * width + x) / 8;
     int byteIndex = y * width + x - index * 8;
-    return (_data[index] >> byteIndex) & 1;
+    return (data[index] >> byteIndex) & 1;
 }
 
 void Bitmap::set(int x, int y, bool value) {
     int index = (y * width + x) / 8;
     int byteIndex = y * width + x - index * 8;
     if (value)
-        _data[index] |= 1 << byteIndex;
+        data[index] |= 1 << byteIndex;
     else
-        _data[index] &= ~(1 << byteIndex);
+        data[index] &= ~(1 << byteIndex);
 }
 
 BitRow Bitmap::operator[](int y) {
