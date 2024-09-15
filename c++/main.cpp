@@ -26,11 +26,14 @@ public:
 
 class Candidate {
 public:
-    Candidate(int fieldWidth, int fieldHeight) : map(fieldWidth, fieldHeight) {}
+    Candidate(int fieldWidth, int fieldHeight) : map(fieldWidth, fieldHeight), colCounter(fieldWidth, 0), rowCounter(fieldHeight, 0) {}
     ~Candidate() {}
 
     Bitmap map; // contains if a pos has been walked on
     std::vector<Pos> path; // contains the order of of the Poses
+
+    std::vector<int> colCounter; // contains an int for each col, that contains the amount of filled spaces in that col
+    std::vector<int> rowCounter; // contains an int for each row, that contains the amount of filled spaces in that row
 
     void outputInFile(const char* filepath);
 };
@@ -39,6 +42,7 @@ public:
 void validateAndAdd(std::vector<Candidate>& candidates, std::vector<Candidate>& solutions, Candidate candidate, Pos nextPos);
 bool checkFilled(Bitmap& map);
 bool checkFinished(Candidate& candidate);
+bool isSeperated(Candidate& candidate); // checks if the plane has been traversed so that you can't get to all spaces
 
 int main(int argc, char** argv) {
 #if HARDCODE_SIZE
@@ -59,6 +63,8 @@ int main(int argc, char** argv) {
             Candidate initailCandiate(size, size);
             initailCandiate.path.push_back(Pos(x, y));
             initailCandiate.map[y][x] = true;
+            initailCandiate.rowCounter[y]++;
+            initailCandiate.colCounter[x]++;
             candidates.push_back(initailCandiate);
         }
     }
@@ -114,6 +120,10 @@ void validateAndAdd(std::vector<Candidate>& candidates, std::vector<Candidate>& 
         return;
     candidate.path.push_back(nextPos);
     candidate.map[nextPos.y][nextPos.x] = true;
+    candidate.colCounter[nextPos.x]++;
+    candidate.rowCounter[nextPos.y]++;
+    if (isSeperated(candidate)) // doesn't seem to get to the right number of solutions
+        return;
     if (checkFinished(candidate))
         solutions.push_back(candidate);
     else
@@ -131,4 +141,26 @@ bool checkFilled(Bitmap& map) {
 
 bool checkFinished(Candidate& candidate) {
     return candidate.path.size() >= candidate.map.width * candidate.map.height;
+}
+
+bool isSeperated(Candidate& candidate) {
+    bool hadEmptyCol = false;
+    bool hadFilledCol = false;
+    for (int x = 0; x < candidate.colCounter.size(); x++) {
+        bool isFilled = candidate.colCounter[x] >= candidate.map.height;
+        if (hadEmptyCol && hadFilledCol && !isFilled)
+            return true;
+        hadEmptyCol = !isFilled || hadEmptyCol;
+        hadFilledCol = isFilled || hadFilledCol;
+    }
+    bool hadEmptyRow = false;
+    bool hadFilledRow = false;
+    for (int y = 0; y < candidate.rowCounter.size(); y++) {
+        bool isFilled = candidate.rowCounter[y] >= candidate.map.width;
+        if (hadEmptyRow && hadFilledRow && !isFilled)
+            return true;
+        hadEmptyRow = !isFilled || hadEmptyRow;
+        hadFilledRow = isFilled || hadFilledRow;
+    }
+    return false;
 }
