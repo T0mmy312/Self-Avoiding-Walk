@@ -57,8 +57,12 @@ public:
 
     bool get(int x, int y);
     void set(int x, int y, bool value);
+#ifdef INCLUDE_STB_IMAGE_WRITE_H // checks if stb_image_write.h was included (this is just to avoid unneccecery headers)
+    void outputAsBitmap(const char* filepath);
+#endif
 
     BitRow operator[](int y);
+    friend std::ostream& operator<<(std::ostream& os, Bitmap bitmap);
 };
 
 // ----------------------------------------------------------------------------------------------------
@@ -82,7 +86,7 @@ BitPointer::operator bool() const {
 // --------------------------------------------------
 
 BitPointer BitRow::operator[](int x) {
-    if (x >= owner->width)
+    if (x >= owner->width || x < 0)
         throw std::invalid_argument("Index out of range!");
     return BitPointer(x, y, owner);
 }
@@ -133,10 +137,31 @@ void Bitmap::set(int x, int y, bool value) {
         data[index] &= ~(1 << byteIndex);
 }
 
+#ifdef INCLUDE_STB_IMAGE_WRITE_H
+void Bitmap::outputAsBitmap(const char* filepath) {
+    uint8_t* img = (uint8_t*)std::malloc(width * height);
+    for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++)
+            img[y * width + x] = get(x, y) * 255;
+    stbi_write_bmp(filepath, width, height, 1, img);
+    std::free(img);
+}
+#endif
+
 BitRow Bitmap::operator[](int y) {
-    if (y >= height)
+    if (y >= height || y < 0)
         throw std::invalid_argument("index out of range!");
-    return BitRow(y, this);
+    BitRow row(y, this); // HOW DOES A SEGMENTATION FAULT HAPPEN HERE, THERE IS NOTHING HERE THAT COULD CAUSE THAT
+    return row;
+}
+
+std::ostream& operator<<(std::ostream& os, Bitmap bitmap) {
+    for (int y = 0; y < bitmap.height; y++) {
+        for (int x = 0; x < bitmap.width; x++)
+            os << (bitmap.get(x, y) ? '#' : '-');
+        os << std::endl;
+    }
+    return os;
 }
 
 #endif

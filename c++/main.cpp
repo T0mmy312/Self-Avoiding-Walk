@@ -3,13 +3,26 @@
 #include <string>
 #include <memory>
 #include <fstream>
+#include <chrono>
+#include <thread>
+#include <mutex>
+#include <deque>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "include/stb_image_write.h"
+
+#define FASTER false // makes it slightly faster but less memory efficient
+
+#if FASTER
+#include "include/fastBitmap.h"
+#else
 #include "include/bitmap.h"
+#endif
 
 #define HARDCODE_SIZE true
-#define SIZE 5
+#define SIZE 6
+
+#define MULTITHREAD false // if it should multithread or not
 
 class Pos {
 public:
@@ -26,23 +39,25 @@ public:
 
 class Candidate {
 public:
-    Candidate(int fieldWidth, int fieldHeight) : map(fieldWidth, fieldHeight), colCounter(fieldWidth, 0), rowCounter(fieldHeight, 0) {}
+    Candidate(int fieldWidth, int fieldHeight) : map(fieldWidth, fieldHeight), path(fieldWidth * fieldHeight, Pos(-1, -1)) {}
     ~Candidate() {}
 
     Bitmap map; // contains if a pos has been walked on
     std::vector<Pos> path; // contains the order of of the Poses
-
-    std::vector<int> colCounter; // contains an int for each col, that contains the amount of filled spaces in that col
-    std::vector<int> rowCounter; // contains an int for each row, that contains the amount of filled spaces in that row
+    int pathIndex = 0; // the current position in the path vector (instead of push_back)
 
     void outputInFile(const char* filepath);
 };
 
+void solve(int sizeX, int sizeY, std::vector<Pos>* startPoses, std::deque<Candidate>* solutions, std::vector<Pos> deltaDirections);
 // if the nextPos creates a valid candidate that is not a solution it adds it to candidates or if its a solution to solutions
-void validateAndAdd(std::vector<Candidate>& candidates, std::vector<Candidate>& solutions, Candidate candidate, Pos nextPos);
-bool checkFilled(Bitmap& map);
+void validateAndAdd(std::deque<Candidate>& candidates, std::deque<Candidate>& solutions, std::vector<Pos>& deltaDirections, Candidate candidate, Pos nextPos);
 bool checkFinished(Candidate& candidate);
-bool isSeperated(Candidate& candidate); // checks if the plane has been traversed so that you can't get to all spaces
+bool connected(Candidate& candidate, std::vector<Pos>& deltaDirections);
+int floodFill(Bitmap& toFill, bool valToFill, Pos currPos, std::vector<Pos>& deltaDirections);
+
+std::mutex solutionsMutex; // handels data access to the shared solution vector
+std::mutex startPositionsMutex; // handels data access to the shared start positions vector
 
 int main(int argc, char** argv) {
 #if HARDCODE_SIZE
@@ -56,35 +71,44 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    std::vector<Candidate> candidates;
-    std::vector<Candidate> solutions;
-    for (int y = 0; y < size; y++) {
-        for (int x = 0; x < size; x++) {
-            Candidate initailCandiate(size, size);
-            initailCandiate.path.push_back(Pos(x, y));
-            initailCandiate.map[y][x] = true;
-            initailCandiate.rowCounter[y]++;
-            initailCandiate.colCounter[x]++;
-            candidates.push_back(initailCandiate);
-        }
-    }
+    auto start = std::chrono::high_resolution_clock::now();
+
+    std::vector<Pos> startingPoses;
+    for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+            startingPoses.push_back(Pos(x, y));
+
+    std::deque<Candidate> solutions;
 
     // all posible movement directions (in case you also want diagonal too or just diagonal)
     std::vector<Pos> deltaDirections = {Pos(0, -1), Pos(1, 0), Pos(0, 1), Pos(-1, 0)};
 
-    while (!candidates.empty()) {
-        Candidate currCandidate = candidates.back();
-        candidates.pop_back();
+#if MULTITHREAD
 
-        // try to create candidates in each direction
-        for (int dir = 0; dir < deltaDirections.size(); dir++) {
-            Pos newPos = currCandidate.path.back() + deltaDirections[dir];
-            validateAndAdd(candidates, solutions, currCandidate, newPos);
-        }
+    unsigned int numThreads = std::thread::hardware_concurrency();
+    if (numThreads == 0) numThreads = 1;
+    std::vector<std::thread> threads(numThreads);
+
+    for (int thread = 0; thread < threads.size(); thread++)
+        threads[thread] = std::thread(solve, size, size, &startingPoses, &solutions, deltaDirections);
+
+    std::cout << "started " << threads.size() << " threads!" << std::endl;
+
+    for (int thread = 0; thread < threads.size(); thread++) {
+        threads[thread].join();
+        std::cout << "thread " << thread << " finished!" << std::endl;
     }
 
+#else
+    solve(size, size, &startingPoses, &solutions, deltaDirections);
+#endif
+
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration = end - start;
+
     // solutions now contains all possible solutions
-    std::cout << solutions.size() << std::endl;
+    std::cout << "solutions: " << solutions.size() << std::endl;
+    std::cout << "time: " << duration.count() << "ms" << std::endl;
 }
 
 void Candidate::outputInFile(const char* filepath) {
@@ -93,12 +117,16 @@ void Candidate::outputInFile(const char* filepath) {
         std::ofstream(filepath).close();
         file = std::fstream(filepath);
     }
+    if (!file) {
+        std::cerr << "Error opening file: " << filepath << std::endl;
+        return;
+    }
     int digits = std::to_string(map.width * map.height - 1).size();
     file << '\n';
     for (int y = 0; y < map.height; y++) {
         for (int x = 0; x < map.width; x++) {
             bool printed = false;
-            for (int i = 0; i < path.size(); i++) {
+            for (int i = 0; i < path.size() && i < pathIndex; i++) {
                 if (path[i].x == x && path[i].y == y) {
                     file << std::string(digits - std::to_string(i).size(), '0') << i << ' ';
                     printed = true;
@@ -113,54 +141,81 @@ void Candidate::outputInFile(const char* filepath) {
     file.close();
 }
 
-void validateAndAdd(std::vector<Candidate>& candidates, std::vector<Candidate>& solutions, Candidate candidate, Pos nextPos) {
+void solve(int sizeX, int sizeY, std::vector<Pos>* startPoses, std::deque<Candidate>* solutions, std::vector<Pos> deltaDirections) {
+    while (true) {
+        Pos startPos;
+        startPositionsMutex.lock();
+        if (startPoses->empty()) {
+            startPositionsMutex.unlock();
+            break;
+        }
+        startPos = startPoses->back();
+        startPoses->pop_back();
+        startPositionsMutex.unlock();
+
+        Candidate initialCandidate(sizeX, sizeY);
+        initialCandidate.map[startPos.y][startPos.x] = true;
+        initialCandidate.path[initialCandidate.pathIndex] = startPos;
+        initialCandidate.pathIndex++;
+        std::deque<Candidate> candidates = {initialCandidate};
+
+        while (!candidates.empty()) {
+            Candidate currCandidate = candidates.back();
+            candidates.pop_back();
+
+            // try to create candidates in each direction
+            for (int dir = 0; dir < deltaDirections.size(); dir++) {
+                Pos newPos = currCandidate.path[currCandidate.pathIndex - 1] + deltaDirections[dir];
+                validateAndAdd(candidates, *solutions, deltaDirections, currCandidate, newPos);
+            }
+        }
+    }
+}
+
+void validateAndAdd(std::deque<Candidate>& candidates, std::deque<Candidate>& solutions, std::vector<Pos>& deltaDirections, Candidate candidate, Pos nextPos) {
     if (nextPos.x < 0 || nextPos.x >= candidate.map.width || nextPos.y < 0 || nextPos.y >= candidate.map.height)
         return;
     if (candidate.map[nextPos.y][nextPos.x])
         return;
-    candidate.path.push_back(nextPos);
+    candidate.path[candidate.pathIndex] = nextPos;
+    candidate.pathIndex++;
     candidate.map[nextPos.y][nextPos.x] = true;
-    candidate.colCounter[nextPos.x]++;
-    candidate.rowCounter[nextPos.y]++;
-    if (isSeperated(candidate)) // doesn't seem to get to the right number of solutions
-        return;
-    if (checkFinished(candidate))
+    if (checkFinished(candidate)) {
+        std::lock_guard<std::mutex> lock(solutionsMutex);
         solutions.push_back(candidate);
-    else
+    }
+    else if (connected(candidate, deltaDirections))
         candidates.push_back(candidate);
 }
 
-bool checkFilled(Bitmap& map) {
-    int bitsLeft = map.dataSize * 8 - map.width * map.height;
-    uint8_t lastByteMask = 0xFF >> (8 - bitsLeft);
-    for (int i = 0; i < map.dataSize - 1; i++)
-        if (map.data[i] != 0xFF)
-            return false;
-    return map.data[map.dataSize - 1] & lastByteMask == lastByteMask;
-}
-
 bool checkFinished(Candidate& candidate) {
-    return candidate.path.size() >= candidate.map.width * candidate.map.height;
+    return candidate.pathIndex >= candidate.map.width * candidate.map.height;
 }
 
-bool isSeperated(Candidate& candidate) {
-    bool hadEmptyCol = false;
-    bool hadFilledCol = false;
-    for (int x = 0; x < candidate.colCounter.size(); x++) {
-        bool isFilled = candidate.colCounter[x] >= candidate.map.height;
-        if (hadEmptyCol && hadFilledCol && !isFilled)
-            return true;
-        hadEmptyCol = !isFilled || hadEmptyCol;
-        hadFilledCol = isFilled || hadFilledCol;
-    }
-    bool hadEmptyRow = false;
-    bool hadFilledRow = false;
-    for (int y = 0; y < candidate.rowCounter.size(); y++) {
-        bool isFilled = candidate.rowCounter[y] >= candidate.map.width;
-        if (hadEmptyRow && hadFilledRow && !isFilled)
-            return true;
-        hadEmptyRow = !isFilled || hadEmptyRow;
-        hadFilledRow = isFilled || hadFilledRow;
-    }
-    return false;
+bool connected(Candidate& candidate, std::vector<Pos>& deltaDirections) {
+    Pos startPos = Pos(0, 0);
+    bool found = false;
+    for (int y = 0; y < candidate.map.height && !found; y++)
+        for (int x = 0; x < candidate.map.width && !found; x++)
+            if (!candidate.map[y][x]) {
+                startPos = Pos(x, y);
+                found = true;
+            }
+
+    Bitmap toCheck(candidate.map);
+    int numTiles = floodFill(toCheck, false, startPos, deltaDirections);
+    return numTiles == (candidate.map.width * candidate.map.height - candidate.pathIndex); // checks if the num of connected tiles is the num of the remaining tiles
+}
+
+int floodFill(Bitmap& toFill, bool valToFill, Pos currPos, std::vector<Pos>& deltaDirections) {
+    if (currPos.x < 0 || currPos.x >= toFill.width || currPos.y < 0 || currPos.y >= toFill.height)
+        return 0;
+    if (toFill[currPos.y][currPos.x] != valToFill)
+        return 0;
+    
+    toFill[currPos.y][currPos.x] = !valToFill;
+    int sum = 1; // 1 is for this tile
+    for (int i = 0; i < deltaDirections.size(); i++)
+        sum += floodFill(toFill, valToFill, currPos + deltaDirections[i], deltaDirections);
+    return sum;
 }
