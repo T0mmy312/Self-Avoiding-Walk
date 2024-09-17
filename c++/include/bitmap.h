@@ -151,8 +151,7 @@ void Bitmap::outputAsBitmap(const char* filepath) {
 BitRow Bitmap::operator[](int y) {
     if (y >= height || y < 0)
         throw std::invalid_argument("index out of range!");
-    BitRow row(y, this); // HOW DOES A SEGMENTATION FAULT HAPPEN HERE, THERE IS NOTHING HERE THAT COULD CAUSE THAT
-    return row;
+    return BitRow(y, this);
 }
 
 std::ostream& operator<<(std::ostream& os, Bitmap bitmap) {
