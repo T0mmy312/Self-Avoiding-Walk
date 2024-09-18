@@ -34,6 +34,8 @@ public:
 };
 
 Bitmap::Bitmap(const Bitmap& bitmap) : width(bitmap.width), height(bitmap.height) {
+    if (bitmap.data == nullptr)
+        return;
     data = (bool**)std::malloc(height * sizeof(bool*));
     for (int y = 0; y < height; y++) {
         bool* row = (bool*)std::malloc(width * sizeof(bool));

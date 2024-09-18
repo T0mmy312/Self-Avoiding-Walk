@@ -95,11 +95,10 @@ BitPointer BitRow::operator[](int x) {
 // Bitmap
 // --------------------------------------------------
 
-Bitmap::Bitmap(const Bitmap& bitmap) {
-    width = bitmap.width;
-    height = bitmap.height;
-    dataSize = bitmap.dataSize;
-
+Bitmap::Bitmap(const Bitmap& bitmap) : width(bitmap.width), height(bitmap.height), dataSize(bitmap.dataSize) {
+    if (bitmap.data == nullptr)
+        return;
+    
     data = (uint8_t*)std::malloc(dataSize);
     if (data == nullptr)
         throw std::bad_alloc();
