@@ -56,7 +56,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, Candidate& can);
 };
 
-void solve(int sizeX, int sizeY, std::vector<Pos>* startPoses, std::deque<Candidate>* solutions, std::vector<Pos> deltaDirections);
+void solve(int sizeX, int sizeY, std::deque<Candidate>* startPoses, std::deque<Candidate>* solutions, std::vector<Pos> deltaDirections);
 // if the nextPos creates a valid candidate that is not a solution it adds it to candidates or if its a solution to solutions
 void validateAndAdd(std::deque<Candidate>& candidates, std::deque<Candidate>& solutions, std::vector<Pos>& deltaDirections, Candidate candidate, Pos nextPos);
 bool checkFinished(Candidate& candidate);
@@ -73,7 +73,11 @@ int main(int argc, char** argv) {
     int size = SIZE;
 #else
     int size;
-    try { size = std::stoi(argv[1]); }
+    try {
+        if (argc < 2)
+            throw std::exception();
+        size = std::stoi(argv[1]);
+    }
     catch (...) {
         std::cerr << "Please enter size as an int as the first argument of this programm!" << std::endl;
         return 1;
@@ -82,12 +86,16 @@ int main(int argc, char** argv) {
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    std::vector<Pos> startingPoses;
+    std::deque<Candidate> startingPoses;
     for (int x = 0; x < std::ceil(size / 2.0); x++) {
         for (int y = 0; y <= x; y++) {
             if ((x + y) % 2 == 1 && size % 2 == 1)
                 continue;
-            startingPoses.push_back(Pos(x, y));
+            Candidate can(size, size);
+            can.path[can.pathIndex] = Pos(x, y);
+            can.pathIndex++;
+            can.map[y][x] = true;
+            startingPoses.push_back(can);
         }
     }
 
@@ -99,7 +107,17 @@ int main(int argc, char** argv) {
 
 #if MULTITHREAD
 
-    unsigned int numThreads = std::min((size_t)std::thread::hardware_concurrency(), startingPoses.size());
+    size_t numThreads = (size_t)std::thread::hardware_concurrency();
+    for (int i = startingPoses.size(); i < numThreads;) {
+        Candidate currCan = startingPoses.back();
+        startingPoses.pop_back();
+        for (int dir = 0; dir < deltaDirections.size(); dir++) {
+            Pos newPos = currCan.path[currCan.pathIndex - 1] + deltaDirections[dir];
+            validateAndAdd(startingPoses, solutions, deltaDirections, currCan, newPos);
+        }
+        i = startingPoses.size();
+    }
+
     if (numThreads == 0) numThreads = 1;
     std::vector<std::thread> threads(numThreads);
 
@@ -230,22 +248,17 @@ std::ostream& operator<<(std::ostream& os, Candidate& can) {
     return os;
 }
 
-void solve(int sizeX, int sizeY, std::vector<Pos>* startPoses, std::deque<Candidate>* solutions, std::vector<Pos> deltaDirections) {
+void solve(int sizeX, int sizeY, std::deque<Candidate>* startPoses, std::deque<Candidate>* solutions, std::vector<Pos> deltaDirections) {
     while (true) {
-        Pos startPos;
         startPositionsMutex.lock();
         if (startPoses->empty()) {
             startPositionsMutex.unlock();
             break;
         }
-        startPos = startPoses->back();
+        Candidate initialCandidate = startPoses->back();
         startPoses->pop_back();
         startPositionsMutex.unlock();
 
-        Candidate initialCandidate(sizeX, sizeY);
-        initialCandidate.map[startPos.y][startPos.x] = true;
-        initialCandidate.path[initialCandidate.pathIndex] = startPos;
-        initialCandidate.pathIndex++;
         std::deque<Candidate> candidates = {initialCandidate};
 
         while (!candidates.empty()) {
